@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings — LLM Order Dependency Evaluator</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Progress Overlay -->
+    <div id="progressOverlay" class="progress-overlay" style="display:none;">
+        <div class="progress-box">
+            <h3>Applying Settings...</h3>
+            <progress></progress>
+            <p>Loading model/dataset. This may take several minutes.</p>
+        </div>
+    </div>
+
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>LLM Order Dependency Evaluator</strong></li>
+        </ul>
+        <ul>
+            <li>
+                <button class="hamburger-btn outline" type="button" aria-label="Menu"
+                        onclick="document.getElementById('sideMenu').classList.toggle('open')">
+                    <span class="hamburger-icon"></span>
+                </button>
+            </li>
+        </ul>
+    </nav>
+
+    <!-- Side Menu -->
+    <div id="sideMenu" class="side-menu">
+        <div class="side-menu-backdrop" onclick="document.getElementById('sideMenu').classList.remove('open')"></div>
+        <aside class="side-menu-panel">
+            <header>
+                <h3>Menu</h3>
+                <button class="close-btn" type="button" aria-label="Close"
+                        onclick="document.getElementById('sideMenu').classList.remove('open')">&times;</button>
+            </header>
+            <ul>
+                <li><a href="/">Analysis</a></li>
+                <li><a href="/settings" class="active-link">Settings</a></li>
+            </ul>
+        </aside>
+    </div>
+
+    <main class="container">
+        <h1>Settings</h1>
+
+        {% if settings_saved %}
+        <article class="settings-saved">
+            Settings saved successfully.
+            {% if is_api_mode %}
+                Using API endpoint: <strong>{{ api_base_url }}</strong>
+            {% else %}
+                Local model: <strong>{{ current_model }}</strong>
+            {% endif %}
+            &middot; Dataset: <strong>{{ current_dataset }}</strong>
+        </article>
+        {% endif %}
+
+        <form method="post" action="/settings" id="settingsForm"
+              onsubmit="document.getElementById('progressOverlay').style.display='flex'">
+
+            <!-- Model Configuration -->
+            <section>
+                <h2>Model Configuration</h2>
+
+                <fieldset>
+                    <legend>Backend</legend>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="backend" value="local"
+                                   {% if not is_api_mode %}checked{% endif %}
+                                   onchange="toggleBackend()">
+                            Local (HuggingFace)
+                        </label>
+                        <label>
+                            <input type="radio" name="backend" value="api"
+                                   {% if is_api_mode %}checked{% endif %}
+                                   onchange="toggleBackend()">
+                            OpenAI-Compatible API
+                        </label>
+                    </div>
+                </fieldset>
+
+                <!-- Local model settings -->
+                <div id="localSettings" {% if is_api_mode %}style="display:none"{% endif %}>
+                    <label for="model_name">Model (HuggingFace ID)</label>
+                    <input type="text" id="model_name" name="model_name"
+                           value="{{ current_model or 'Qwen/Qwen3.5-2B' }}"
+                           placeholder="e.g. Qwen/Qwen3.5-2B">
+                    <small>Changing the model will download and load the new model. This may take several minutes.</small>
+                </div>
+
+                <!-- API settings -->
+                <div id="apiSettings" {% if not is_api_mode %}style="display:none"{% endif %}>
+                    <label for="api_base_url">API Base URL</label>
+                    <input type="text" id="api_base_url" name="api_base_url"
+                           value="{{ api_base_url }}"
+                           placeholder="e.g. http://localhost:11434/v1">
+                    <small>
+                        The base URL of any OpenAI-compatible API (vLLM, Ollama, LM Studio, text-generation-inference, etc.).
+                        Must point to the OpenAI-compatible base (e.g. <code>http://host:port/v1</code>).
+                    </small>
+
+                    <label for="api_key">API Key <small>(optional)</small></label>
+                    <input type="password" id="api_key" name="api_key"
+                           value="{{ api_key }}"
+                           placeholder="sk-... or leave blank if not required">
+
+                    <label for="api_model">Model Name (sent in API requests)</label>
+                    <input type="text" id="api_model" name="api_model"
+                           value="{{ api_model }}"
+                           placeholder="e.g. qwen3.5:2b, gpt-4o-mini, etc.">
+                    <small>The model identifier your API endpoint expects.</small>
+
+                    <div class="test-connection">
+                        <button type="button" class="outline" onclick="testApiConnection()">
+                            Test Connection
+                        </button>
+                        <span id="testSpinner" style="display:none;">Testing...</span>
+                        <div id="testResult" style="display:none; margin-top:0.75rem;"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Generation Parameters -->
+            <section>
+                <h2>Generation Parameters</h2>
+                <small class="section-note">
+                    These apply to both local and API backends.
+                    Temperature 0 = greedy/deterministic. Seed ensures reproducibility where supported.
+                </small>
+
+                <div class="param-grid">
+                    <div>
+                        <label for="gen_temperature">Temperature</label>
+                        <input type="number" id="gen_temperature" name="gen_temperature"
+                               value="{{ gen_temperature }}" min="0" max="2" step="0.1">
+                        <small>0 = greedy (deterministic). Higher = more random.</small>
+                    </div>
+                    <div>
+                        <label for="gen_max_new_tokens">Max New Tokens</label>
+                        <input type="number" id="gen_max_new_tokens" name="gen_max_new_tokens"
+                               value="{{ gen_max_new_tokens }}" min="1" max="512">
+                        <small>Max tokens to generate per question. 10 is usually enough for a single letter.</small>
+                    </div>
+                    <div>
+                        <label for="gen_top_p">Top-p (nucleus sampling)</label>
+                        <input type="number" id="gen_top_p" name="gen_top_p"
+                               value="{{ gen_top_p }}" min="0" max="1" step="0.05">
+                        <small>1.0 = no filtering. Lower = restrict to higher-probability tokens.</small>
+                    </div>
+                    <div>
+                        <label for="gen_seed">Seed</label>
+                        <input type="text" id="gen_seed" name="gen_seed"
+                               value="{{ gen_seed }}"
+                               placeholder="e.g. 42 or leave blank">
+                        <small>Integer for reproducibility. Leave blank for non-deterministic.</small>
+                    </div>
+                    <div>
+                        <label for="gen_batch_size">Batch Size</label>
+                        <input type="number" id="gen_batch_size" name="gen_batch_size"
+                               value="{{ gen_batch_size }}" min="1" max="128">
+                        <small>
+                            Local: questions processed per GPU batch.
+                            API: concurrent requests in parallel.
+                        </small>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dataset Configuration -->
+            <section>
+                <h2>Dataset Configuration</h2>
+
+                <label for="dataset_name">Dataset (HuggingFace ID)</label>
+                <input type="text" id="dataset_name" name="dataset_name"
+                       value="{{ current_dataset or 'tau/commonsense_qa' }}"
+                       placeholder="e.g. tau/commonsense_qa">
+                <small>Dataset must have the same schema as commonsense_qa (choices.label, choices.text, answerKey).</small>
+            </section>
+
+            <div class="button-group">
+                <button type="submit">Save &amp; Apply</button>
+                <a href="/" role="button" class="secondary outline">Cancel</a>
+            </div>
+        </form>
+    </main>
+
+    <script>
+        function toggleBackend() {
+            const isApi = document.querySelector('input[name="backend"][value="api"]').checked;
+            document.getElementById('localSettings').style.display = isApi ? 'none' : '';
+            document.getElementById('apiSettings').style.display = isApi ? '' : 'none';
+            if (!isApi) {
+                document.getElementById('api_base_url').value = '';
+                document.getElementById('api_key').value = '';
+                document.getElementById('api_model').value = '';
+            }
+        }
+
+        async function testApiConnection() {
+            const spinner = document.getElementById('testSpinner');
+            const resultDiv = document.getElementById('testResult');
+            const baseUrl = document.getElementById('api_base_url').value.trim();
+            const apiKey = document.getElementById('api_key').value.trim();
+            const apiModel = document.getElementById('api_model').value.trim();
+
+            resultDiv.style.display = 'none';
+            spinner.style.display = 'inline';
+
+            try {
+                const resp = await fetch('/test_api', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        api_base_url: baseUrl,
+                        api_key: apiKey,
+                        api_model: apiModel,
+                    }),
+                });
+                const data = await resp.json();
+                resultDiv.style.display = 'block';
+
+                if (data.success) {
+                    resultDiv.className = 'test-result test-success';
+                    resultDiv.innerHTML = '<strong>Success!</strong> Model responded:<br>' +
+                        '<code>' + data.response.replace(/</g, '&lt;') + '</code>';
+                } else {
+                    resultDiv.className = 'test-result test-error';
+                    resultDiv.innerHTML = '<strong>Failed:</strong> ' +
+                        data.error.replace(/</g, '&lt;');
+                }
+            } catch (e) {
+                resultDiv.style.display = 'block';
+                resultDiv.className = 'test-result test-error';
+                resultDiv.innerHTML = '<strong>Error:</strong> ' + e.message;
+            } finally {
+                spinner.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

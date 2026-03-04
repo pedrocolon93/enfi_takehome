@@ -1,0 +1,314 @@
+/* Minimal custom styles on top of Pico CSS */
+
+.radio-group {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.radio-group label {
+    cursor: pointer;
+}
+
+.button-group {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.metrics-summary {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.metrics-summary article {
+    flex: 1;
+    min-width: 150px;
+    text-align: center;
+}
+
+.chart-container {
+    max-width: 700px;
+    margin: 1.5rem auto;
+}
+
+.chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.chart-cell {
+    background: var(--pico-card-background-color);
+    border-radius: var(--pico-border-radius);
+    padding: 1rem;
+}
+
+/* Hamburger menu button */
+.hamburger-btn {
+    background: none;
+    border: none;
+    padding: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.hamburger-icon {
+    display: block;
+    width: 22px;
+    height: 2px;
+    background: var(--pico-color);
+    position: relative;
+}
+
+.hamburger-icon::before,
+.hamburger-icon::after {
+    content: '';
+    display: block;
+    width: 22px;
+    height: 2px;
+    background: var(--pico-color);
+    position: absolute;
+    left: 0;
+}
+
+.hamburger-icon::before {
+    top: -7px;
+}
+
+.hamburger-icon::after {
+    top: 7px;
+}
+
+/* Side menu */
+.side-menu {
+    display: none;
+}
+
+.side-menu.open {
+    display: block;
+}
+
+.side-menu-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 999;
+}
+
+.side-menu-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 280px;
+    max-width: 80vw;
+    height: 100%;
+    background: var(--pico-background-color, #fff);
+    z-index: 1000;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+    padding: 1rem 1.5rem;
+    overflow-y: auto;
+}
+
+.side-menu-panel header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding: 0;
+    border: none;
+}
+
+.side-menu-panel header h3 {
+    margin: 0;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    line-height: 1;
+    color: var(--pico-color);
+}
+
+.side-menu-panel ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.side-menu-panel ul li {
+    padding: 0;
+}
+
+.side-menu-panel ul li a {
+    display: block;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    text-decoration: none;
+}
+
+/* Generation parameters grid */
+.param-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.param-grid small {
+    display: block;
+    margin-top: 0.25rem;
+}
+
+.section-note {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--pico-muted-color);
+}
+
+/* Settings saved banner */
+.settings-saved {
+    padding: 0.75rem 1rem;
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: var(--pico-border-radius);
+    color: #155724;
+    margin-bottom: 1rem;
+}
+
+/* ODS score color coding */
+.ods-display article {
+    text-align: center;
+}
+
+.ods-score {
+    font-size: 2rem;
+}
+
+.ods-low {
+    color: #2ecc71;
+}
+
+.ods-medium {
+    color: #f39c12;
+}
+
+.ods-high {
+    color: #e74c3c;
+}
+
+/* ODS explanation box */
+.ods-explanation {
+    margin: 1rem 0;
+    padding: 1rem;
+    background: var(--pico-card-background-color);
+    border-radius: var(--pico-border-radius);
+    border: 1px solid var(--pico-muted-border-color);
+}
+
+.ods-explanation p {
+    margin-bottom: 0.5rem;
+}
+
+.ods-explanation ul {
+    margin-top: 0.5rem;
+}
+
+/* Progress overlay */
+.progress-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.progress-box {
+    background: var(--pico-background-color, #fff);
+    padding: 2rem 3rem;
+    border-radius: var(--pico-border-radius);
+    text-align: center;
+    max-width: 400px;
+    width: 90%;
+}
+
+.progress-box h3 {
+    margin-bottom: 1rem;
+}
+
+.progress-box progress {
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+.progress-box p {
+    color: var(--pico-muted-color);
+    font-size: 0.9rem;
+}
+
+/* Insight box */
+.insight-box {
+    padding: 1rem 1.25rem;
+    background: #eef6ff;
+    border-left: 4px solid #36A2EB;
+    border-radius: var(--pico-border-radius);
+    margin-bottom: 1.5rem;
+    line-height: 1.6;
+}
+
+/* Test connection */
+.test-connection {
+    margin-top: 1rem;
+}
+
+.test-result {
+    padding: 0.75rem 1rem;
+    border-radius: var(--pico-border-radius);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.test-result code {
+    display: block;
+    margin-top: 0.5rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.test-success {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+}
+
+.test-error {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+/* Active nav link */
+.active-link {
+    font-weight: bold;
+}
+
+footer {
+    margin-top: 3rem;
+    text-align: center;
+    opacity: 0.6;
+}

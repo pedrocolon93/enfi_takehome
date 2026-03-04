@@ -1,0 +1,17 @@
+We are building an app that evaluates an LLM's sensitivity to the order of inputs in multiple choice questions.
+To accomplish this we are going to do the following:
+1) We are going to use the HuggingFace Transformers library to load a generative model.
+    a) The initial model we are going to use is: Qwen/Qwen3.5-2B
+2) We are going to use the HuggingFace datasets library to load a multiple choice dataset.
+    a) An example of a multiple choice dataset is: tau/commonsense_qa
+3) We will encapsulate the model in a class called "ModelEvaluator", this class is going to have two methods called "run_dataset_on_model",
+"load_model", and will be in charge of loading a given model and consuming a given dataset and generate the results.
+4) We will encapsulate the dataset in a class called "DatasetEvaluator", this class is going to have the following methods:
+"permute_dataset", "load_dataset". The first will move the answer to a given position, and return this modified dataset.
+5) We will have a class called "App" that will be in charge of orchestrating the execution of the program. This will be a small
+fastApi server that will be able to consume the two classes above, and have a web interface that lets users select where the golden answer will be,
+an amount of questions to sample and test, and will generate a plot of the results distribution, the results should be the amount
+ of times a certain answer was given as a response to a question in barcharts per letter. The app should also have a mode that
+ is not shuffled (the golden answer is in its original location). The app should generate precision/recall and standard deviations for each letter.
+6) As you generate the system, write a README.md file that describes the system, document the methods and inputs, and
+add any dependencies that are needed. Use websearch to find the documentation for the libraries you are using.

@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Order Dependency Evaluator</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+    <!-- Progress Overlay -->
+    <div id="progressOverlay" class="progress-overlay" style="display:none;">
+        <div class="progress-box">
+            <h3>Running Evaluation...</h3>
+            <progress></progress>
+            <p id="progressMessage">Sending questions to the model. This may take several minutes.</p>
+        </div>
+    </div>
+
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>LLM Order Dependency Evaluator</strong></li>
+        </ul>
+        <ul>
+            <li>
+                <button class="hamburger-btn outline" type="button" aria-label="Menu"
+                        onclick="document.getElementById('sideMenu').classList.toggle('open')">
+                    <span class="hamburger-icon"></span>
+                </button>
+            </li>
+        </ul>
+    </nav>
+
+    <!-- Side Menu -->
+    <div id="sideMenu" class="side-menu">
+        <div class="side-menu-backdrop" onclick="document.getElementById('sideMenu').classList.remove('open')"></div>
+        <aside class="side-menu-panel">
+            <header>
+                <h3>Menu</h3>
+                <button class="close-btn" type="button" aria-label="Close"
+                        onclick="document.getElementById('sideMenu').classList.remove('open')">&times;</button>
+            </header>
+            <ul>
+                <li><a href="/" class="active-link">Analysis</a></li>
+                <li><a href="/settings">Settings</a></li>
+            </ul>
+        </aside>
+    </div>
+
+    <main class="container">
+        <h1>Analysis</h1>
+        <p>Evaluate how sensitive a language model is to the ordering of answer choices in multiple-choice questions.</p>
+
+        <!-- Evaluation Form -->
+        <section>
+            <h2>Run Evaluation</h2>
+
+            <form method="post" action="/evaluate" id="singleForm" onsubmit="showProgress(this)">
+                <fieldset>
+                    <legend>Gold Answer Position</legend>
+                    <div class="radio-group">
+                        <label><input type="radio" name="position" value="original" checked> Original</label>
+                        <label><input type="radio" name="position" value="A"> A</label>
+                        <label><input type="radio" name="position" value="B"> B</label>
+                        <label><input type="radio" name="position" value="C"> C</label>
+                        <label><input type="radio" name="position" value="D"> D</label>
+                        <label><input type="radio" name="position" value="E"> E</label>
+                    </div>
+                </fieldset>
+
+                <label for="num_questions">Number of Questions to Sample</label>
+                <input type="number" id="num_questions" name="num_questions"
+                       value="{{ num_questions or 50 }}" min="1" max="1221">
+
+                <div class="button-group">
+                    <button type="submit">Run Single Permutation</button>
+                    <button type="submit" formaction="/evaluate_all" class="secondary">
+                        Run All Permutations (with ODS)
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <!-- Single Permutation Results -->
+        {% if results %}
+        <section>
+            <h2>Results — Gold at Position: {{ results.position | upper }}</h2>
+
+            <div class="metrics-summary">
+                <article>
+                    <h3>{{ (results.accuracy * 100) | round(1) }}%</h3>
+                    <p>Accuracy ({{ results.correct }}/{{ results.total }})</p>
+                </article>
+                <article>
+                    <h3>{{ results.stdev }}</h3>
+                    <p>Std Dev (letter counts)</p>
+                </article>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="singleChart"></canvas>
+            </div>
+
+            <h3>Per-Letter Metrics</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Letter</th>
+                        <th>Count</th>
+                        <th>Precision</th>
+                        <th>Recall</th>
+                        <th>F1</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lbl in ["A", "B", "C", "D", "E"] %}
+                    <tr>
+                        <td>{{ lbl }}</td>
+                        <td>{{ results.letter_counts.get(lbl, 0) }}</td>
+                        <td>{{ results.per_letter[lbl].precision }}</td>
+                        <td>{{ results.per_letter[lbl].recall }}</td>
+                        <td>{{ results.per_letter[lbl].f1 }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if results.letter_counts.get("X", 0) > 0 %}
+                    <tr>
+                        <td>X (unparsed)</td>
+                        <td>{{ results.letter_counts["X"] }}</td>
+                        <td>—</td>
+                        <td>—</td>
+                        <td>—</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+
+            <a href="/export_csv" role="button" class="outline">Download Results as CSV</a>
+        </section>
+
+        <script>
+            const singleData = {{ chart_data | safe }};
+            const letterColorMap = {
+                'A': '#FF6384', 'B': '#36A2EB', 'C': '#FFCE56',
+                'D': '#4BC0C0', 'E': '#9966FF', 'X': '#999999'
+            };
+            const singleLabels = Object.keys(singleData);
+            new Chart(document.getElementById('singleChart'), {
+                type: 'bar',
+                data: {
+                    labels: singleLabels,
+                    datasets: [{
+                        label: 'Times Selected',
+                        data: Object.values(singleData),
+                        backgroundColor: singleLabels.map(l => letterColorMap[l] || '#999'),
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: { display: true, text: 'Model Answer Distribution (Gold at {{ results.position | upper }})' },
+                        legend: { display: false },
+                    },
+                    scales: { y: { beginAtZero: true, title: { display: true, text: 'Count' } } }
+                }
+            });
+        </script>
+        {% endif %}
+
+        <!-- All Permutations Results -->
+        {% if all_results %}
+        <section>
+            <h2>All Permutations Results</h2>
+
+            <!-- ODS Score -->
+            <div class="ods-display">
+                <article>
+                    <h3 class="ods-score
+                        {% if ods < 0.2 %}ods-low{% elif ods < 0.5 %}ods-medium{% else %}ods-high{% endif %}">
+                        ODS: {{ ods }}
+                    </h3>
+                    <p>
+                        Option Dependency Score
+                        (0.0 = perfectly invariant, 1.0 = completely dependent)
+                    </p>
+                </article>
+            </div>
+
+            <!-- ODS Explanation -->
+            <details class="ods-explanation" open>
+                <summary><strong>What is ODS?</strong></summary>
+                <p>
+                    The <strong>Option Dependency Score (ODS)</strong> measures how much a model's answer
+                    changes when the correct answer is moved to different positions among the choices.
+                </p>
+                <p>
+                    It works by running the same set of questions with the correct answer placed at each
+                    position (A through E), then measuring the <em>variance</em> of how often the model
+                    selects each letter across those permutations. If the model always picks the same
+                    distribution regardless of where the correct answer is, the variance is zero and
+                    <strong>ODS = 0.0</strong> (perfectly order-invariant). If the model's selections shift
+                    dramatically based on position, variance is high and <strong>ODS approaches 1.0</strong>
+                    (completely order-dependent).
+                </p>
+                <p>
+                    Formally: for each letter L, we compute the variance of its selection probability across
+                    the 5 permutations, then average those variances and normalize by the theoretical maximum (0.16).
+                </p>
+                <ul>
+                    <li><strong class="ods-low">ODS &lt; 0.2</strong> — Low dependency: the model is fairly robust to option ordering.</li>
+                    <li><strong class="ods-medium">0.2 &le; ODS &lt; 0.5</strong> — Moderate dependency: some positional bias present.</li>
+                    <li><strong class="ods-high">ODS &ge; 0.5</strong> — High dependency: strong positional bias; answers heavily influenced by ordering.</li>
+                </ul>
+            </details>
+
+            <!-- Per-permutation summary table -->
+            <h3>Accuracy by Position</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Gold Position</th>
+                        <th>Accuracy</th>
+                        <th>Correct</th>
+                        <th>Std Dev</th>
+                        {% for lbl in ["A", "B", "C", "D", "E"] %}
+                        <th>{{ lbl }} count</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pos in ["original", "A", "B", "C", "D", "E"] %}
+                    {% if pos in all_results %}
+                    <tr>
+                        <td>{{ pos | upper }}</td>
+                        <td>{{ (all_results[pos].accuracy * 100) | round(1) }}%</td>
+                        <td>{{ all_results[pos].correct }}/{{ all_results[pos].total }}</td>
+                        <td>{{ all_results[pos].stdev }}</td>
+                        {% for lbl in ["A", "B", "C", "D", "E"] %}
+                        <td>{{ all_results[pos].letter_counts.get(lbl, 0) }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <!-- Chart grid -->
+            <h3>Answer Distribution per Permutation</h3>
+
+            <!-- Insight note -->
+            {% if insight and insight.most_biased_position %}
+            <article class="insight-box">
+                <strong>Insight:</strong> To identify positional bias, look at the non-gold answers
+                (all bars <em>except</em> the gold position letter) in each chart. The permutation where
+                the non-gold answers are lowest overall reveals the strongest bias — the model is
+                concentrating most of its selections on that position's letter regardless of content.
+                <br><br>
+                In this run, position <strong>{{ insight.most_biased_position }}</strong> shows the strongest bias:
+                when the gold answer is at {{ insight.most_biased_position }}, the model selected
+                {{ insight.most_biased_position }} for
+                <strong>{{ insight.detail[insight.most_biased_position].gold_count }}</strong>
+                out of {{ insight.detail[insight.most_biased_position].total }} questions, leaving only
+                <strong>{{ insight.detail[insight.most_biased_position].non_gold_sum }}</strong>
+                selections spread across the other letters.
+
+                {% if insight.detail | length > 1 %}
+                <br><br>
+                <small>Non-gold selection totals per position:
+                {% for pos in ["A", "B", "C", "D", "E"] %}
+                    {% if pos in insight.detail %}
+                        {{ pos }}={{ insight.detail[pos].non_gold_sum }}{% if not loop.last %}, {% endif %}
+                    {% endif %}
+                {% endfor %}
+                </small>
+                {% endif %}
+            </article>
+            {% endif %}
+
+            <div class="chart-grid">
+                {% for pos in ["original", "A", "B", "C", "D", "E"] %}
+                {% if pos in all_results %}
+                <div class="chart-cell">
+                    <canvas id="chart_{{ pos }}"></canvas>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+
+            <!-- Combined comparison chart -->
+            <h3>Combined Comparison</h3>
+            <div class="chart-container">
+                <canvas id="combinedChart"></canvas>
+            </div>
+
+            <!-- Per-letter detail tables for each permutation -->
+            <details>
+                <summary>Detailed Per-Letter Metrics</summary>
+                {% for pos in ["original", "A", "B", "C", "D", "E"] %}
+                {% if pos in all_results %}
+                <h4>Gold at {{ pos | upper }}</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Letter</th>
+                            <th>Count</th>
+                            <th>Precision</th>
+                            <th>Recall</th>
+                            <th>F1</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for lbl in ["A", "B", "C", "D", "E"] %}
+                        <tr>
+                            <td>{{ lbl }}</td>
+                            <td>{{ all_results[pos].letter_counts.get(lbl, 0) }}</td>
+                            <td>{{ all_results[pos].per_letter[lbl].precision }}</td>
+                            <td>{{ all_results[pos].per_letter[lbl].recall }}</td>
+                            <td>{{ all_results[pos].per_letter[lbl].f1 }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% endfor %}
+            </details>
+
+            <a href="/export_csv" role="button" class="outline">Download All Results as CSV</a>
+        </section>
+
+        <script>
+            const allData = {{ all_chart_data | safe }};
+            const letterColors = {
+                'A': '#FF6384', 'B': '#36A2EB', 'C': '#FFCE56',
+                'D': '#4BC0C0', 'E': '#9966FF', 'X': '#999999'
+            };
+            const posLabels = ['original', 'A', 'B', 'C', 'D', 'E'];
+
+            // Individual charts per permutation — each bar gets its own letter color
+            for (const pos of posLabels) {
+                if (!allData[pos]) continue;
+                const canvas = document.getElementById('chart_' + pos);
+                if (!canvas) continue;
+                const labels = Object.keys(allData[pos]);
+                new Chart(canvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Times Selected',
+                            data: Object.values(allData[pos]),
+                            backgroundColor: labels.map(l => letterColors[l] || '#999'),
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            title: { display: true, text: 'Gold at ' + pos.toUpperCase() },
+                            legend: { display: false },
+                        },
+                        scales: { y: { beginAtZero: true } }
+                    }
+                });
+            }
+
+            // Combined comparison chart — each dataset (permutation) gets a distinct color
+            const combinedDatasets = [];
+            const posColors = {
+                'original': '#888888',
+                'A': '#FF6384',
+                'B': '#36A2EB',
+                'C': '#FFCE56',
+                'D': '#4BC0C0',
+                'E': '#9966FF',
+            };
+            for (const pos of posLabels) {
+                if (!allData[pos]) continue;
+                combinedDatasets.push({
+                    label: 'Gold@' + pos.toUpperCase(),
+                    data: ['A', 'B', 'C', 'D', 'E'].map(l => allData[pos][l] || 0),
+                    backgroundColor: posColors[pos],
+                });
+            }
+            new Chart(document.getElementById('combinedChart'), {
+                type: 'bar',
+                data: {
+                    labels: ['A', 'B', 'C', 'D', 'E'],
+                    datasets: combinedDatasets,
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: { display: true, text: 'Answer Distribution Comparison Across Permutations' }
+                    },
+                    scales: { y: { beginAtZero: true, title: { display: true, text: 'Count' } } }
+                }
+            });
+        </script>
+        {% endif %}
+
+        <footer>
+            <p><small>
+                {% if is_api_mode %}
+                    API: <strong>{{ api_base_url }}</strong> ({{ api_model }})
+                {% else %}
+                    Model: <strong>{{ current_model or 'Qwen/Qwen3.5-2B' }}</strong>
+                {% endif %}
+                &middot; Dataset: <strong>{{ current_dataset or 'tau/commonsense_qa' }}</strong>
+            </small></p>
+        </footer>
+    </main>
+
+    <script>
+        function showProgress(form) {
+            const overlay = document.getElementById('progressOverlay');
+            const msg = document.getElementById('progressMessage');
+            if (form.submitter && form.submitter.formAction && form.submitter.formAction.includes('evaluate_all')) {
+                msg.textContent = 'Running all 6 permutations. This may take a while...';
+            } else {
+                msg.textContent = 'Sending questions to the model. This may take several minutes.';
+            }
+            overlay.style.display = 'flex';
+        }
+    </script>
+</body>
+</html>
