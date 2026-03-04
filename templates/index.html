@@ -15,6 +15,7 @@
             <h3>Running Evaluation...</h3>
             <progress></progress>
             <p id="progressMessage">Sending questions to the model. This may take several minutes.</p>
+            <button id="cancelButton" type="button" class="secondary outline" onclick="cancelEvaluation()" style="margin-top: 1rem;">Cancel</button>
         </div>
     </div>
 
@@ -176,8 +177,11 @@
             <div class="ods-display">
                 <article>
                     <h3 class="ods-score
-                        {% if ods < 0.2 %}ods-low{% elif ods < 0.5 %}ods-medium{% else %}ods-high{% endif %}">
-                        ODS: {{ ods }}
+                        {% if ods is none %}ods-medium
+                        {% elif ods < 0.2 %}ods-low
+                        {% elif ods < 0.5 %}ods-medium
+                        {% else %}ods-high{% endif %}">
+                        ODS: {{ ods if ods is not none else "N/A" }}
                     </h3>
                     <p>
                         Option Dependency Score
@@ -413,12 +417,35 @@
         function showProgress(form) {
             const overlay = document.getElementById('progressOverlay');
             const msg = document.getElementById('progressMessage');
+            const cancelBtn = document.getElementById('cancelButton');
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.disabled = false;
+            
             if (form.submitter && form.submitter.formAction && form.submitter.formAction.includes('evaluate_all')) {
                 msg.textContent = 'Running all 6 permutations. This may take a while...';
             } else {
                 msg.textContent = 'Sending questions to the model. This may take several minutes.';
             }
             overlay.style.display = 'flex';
+        }
+
+        async function cancelEvaluation() {
+            const btn = document.getElementById('cancelButton');
+            const msg = document.getElementById('progressMessage');
+            btn.disabled = true;
+            btn.textContent = 'Cancelling...';
+            msg.textContent = 'Cancellation requested, finishing current batch...';
+            
+            try {
+                const response = await fetch('/cancel', { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+            } catch (error) {
+                console.error('Failed to cancel evaluation:', error);
+                btn.disabled = false;
+                btn.textContent = 'Cancel Failed - Retry';
+            }
         }
     </script>
 </body>

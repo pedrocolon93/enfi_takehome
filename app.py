@@ -8,6 +8,7 @@ ODS), and serve results via a web interface with Chart.js visualizations.
 import csv
 import io
 import json
+import logging
 from collections import Counter
 
 import numpy as np
@@ -18,6 +19,14 @@ from fastapi.templating import Jinja2Templates
 
 from model_evaluator import ModelEvaluator
 from dataset_evaluator import DatasetEvaluator
+
+# Configure logging for all modules
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LLM Order Dependency Evaluator")
 templates = Jinja2Templates(directory="templates")
@@ -54,8 +63,10 @@ def _settings_context() -> dict:
 @app.on_event("startup")
 async def startup():
     """Load model and dataset when the server starts."""
+    logger.info("Server starting up — loading model and dataset")
     model_evaluator.load_model()
     dataset_evaluator.load_dataset()
+    logger.info("Startup complete")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -91,6 +102,8 @@ async def test_api(request: Request):
         api_key = body.get("api_key", "").strip() or "not-needed"
         api_model = body.get("api_model", "").strip()
 
+        logger.info("Testing API connection: base_url=%s, model=%s", base_url, api_model)
+
         if not base_url:
             return JSONResponse({"success": False, "response": "", "error": "API Base URL is required."})
         if not api_model:
@@ -111,8 +124,10 @@ async def test_api(request: Request):
         )
         content = completion.choices[0].message.content
         text = content.strip() if content else "(empty response)"
+        logger.info("API test successful: %r", text[:80])
         return JSONResponse({"success": True, "response": text, "error": ""})
     except Exception as e:
+        logger.error("API test failed: %s", e)
         return JSONResponse({"success": False, "response": "", "error": str(e)})
 
 
@@ -131,6 +146,7 @@ async def update_settings(
     gen_batch_size: int = Form(8),
 ):
     """Update the model, dataset, and generation parameters."""
+    logger.info("Settings update requested")
     api_base_url = api_base_url.strip() or None
     api_key = api_key.strip() or None
     api_model = api_model.strip() or None
@@ -154,6 +170,10 @@ async def update_settings(
     gp.batch_size = max(1, gen_batch_size)
     seed_str = gen_seed.strip()
     gp.seed = int(seed_str) if seed_str else None
+
+    logger.info("Generation params updated: temp=%.2f, max_tokens=%d, top_p=%.2f, "
+                "seed=%s, batch_size=%d",
+                gp.temperature, gp.max_new_tokens, gp.top_p, gp.seed, gp.batch_size)
 
     # Apply API settings
     model_evaluator.api_base_url = api_base_url
@@ -193,12 +213,16 @@ async def evaluate(
     """
     global _last_raw_results
 
+    logger.info("Single evaluation: position=%s, num_questions=%d", position, num_questions)
+    model_evaluator.cancel_requested = False
+    
     sample = dataset_evaluator.sample_dataset(num_questions, seed=42)
     permuted = dataset_evaluator.permute_dataset(sample, position)
     raw_results = model_evaluator.run_dataset_on_model(permuted)
 
     _last_raw_results = raw_results
     metrics = compute_metrics(raw_results, position)
+    logger.info("Single evaluation complete: accuracy=%.2f%%", metrics["accuracy"] * 100)
 
     return templates.TemplateResponse("index.html", {
         "request": request,
@@ -219,12 +243,19 @@ async def evaluate_all(
     """Run evaluation across all permutations (A-E + original) and compute ODS."""
     global _last_raw_results
 
+    logger.info("Full evaluation: num_questions=%d, running 6 permutations", num_questions)
+    model_evaluator.cancel_requested = False
+    
     sample = dataset_evaluator.sample_dataset(num_questions, seed=42)
 
     all_metrics = {}
     all_raw = []
 
     for position in ["original"] + LABELS:
+        if model_evaluator.cancel_requested:
+            logger.warning("Full evaluation cancelled during position %s", position)
+            break
+            
         permuted = dataset_evaluator.permute_dataset(sample, position)
         raw_results = model_evaluator.run_dataset_on_model(permuted)
         # Tag each result with the gold_position for CSV
@@ -236,6 +267,12 @@ async def evaluate_all(
     _last_raw_results = all_raw
     ods = compute_ods(all_metrics)
     insight = compute_bias_insight(all_metrics)
+
+    logger.info("Full evaluation complete: ODS=%.4f, most_biased=%s",
+                ods, insight.get("most_biased_position"))
+    for pos, m in all_metrics.items():
+        logger.info("  %s: accuracy=%.1f%%, counts=%s",
+                     pos, m["accuracy"] * 100, m["letter_counts"])
 
     return templates.TemplateResponse("index.html", {
         "request": request,
@@ -251,6 +288,14 @@ async def evaluate_all(
     })
 
 
+@app.post("/cancel")
+async def cancel_evaluation(request: Request):
+    """Cancel an ongoing evaluation."""
+    logger.info("Cancellation requested by user")
+    model_evaluator.cancel_requested = True
+    return JSONResponse({"success": True, "message": "Cancellation requested"})
+
+
 @app.get("/export_csv")
 async def export_csv():
     """Export the most recent evaluation results as a CSV file.
@@ -261,8 +306,10 @@ async def export_csv():
         model_answer, model_raw_response, correct
     """
     if not _last_raw_results:
+        logger.warning("CSV export requested but no results available")
         return HTMLResponse("No results to export. Run an evaluation first.",
                             status_code=400)
+    logger.info("Exporting CSV: %d rows", len(_last_raw_results))
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=[
@@ -370,9 +417,15 @@ def compute_ods(all_results: dict) -> float:
         ODS value between 0.0 and 1.0.
     """
     per_letter_variances = []
+    
+    # Require at least two permutations to compute variance
+    valid_perms = [lbl for lbl in LABELS if lbl in all_results]
+    if len(valid_perms) < 2:
+        return None
+
     for letter in LABELS:
         fractions = []
-        for perm_key in LABELS:
+        for perm_key in valid_perms:
             metrics = all_results[perm_key]
             total = metrics["total"]
             count = metrics["letter_counts"].get(letter, 0)
@@ -429,4 +482,6 @@ def compute_bias_insight(all_results: dict) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
+    print("Starting...")
     uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("Server started at http://0.0.0.0:8000")

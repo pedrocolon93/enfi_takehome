@@ -1,8 +1,11 @@
 """Dataset loading and permutation for MCQ order dependency evaluation."""
 
 import copy
+import logging
 import random
 from datasets import load_dataset as hf_load_dataset
+
+logger = logging.getLogger(__name__)
 
 
 class DatasetEvaluator:
@@ -24,6 +27,8 @@ class DatasetEvaluator:
         self.dataset_name = dataset_name
         self.split = split
         self.dataset = None
+        logger.info("DatasetEvaluator initialized: dataset=%s, split=%s",
+                     dataset_name, split)
 
     def load_dataset(self) -> None:
         """Load the dataset from HuggingFace Hub.
@@ -31,7 +36,9 @@ class DatasetEvaluator:
         Uses the validation split by default because the test split of
         commonsense_qa has empty answerKey values.
         """
+        logger.info("Loading dataset: %s (split=%s)", self.dataset_name, self.split)
         self.dataset = hf_load_dataset(self.dataset_name, split=self.split)
+        logger.info("Dataset loaded: %d examples", len(self.dataset))
 
     def sample_dataset(self, n: int, seed: int = 42) -> list[dict]:
         """Return a reproducible random sample of n items.
@@ -48,11 +55,19 @@ class DatasetEvaluator:
         if self.dataset is None:
             raise RuntimeError("Dataset not loaded. Call load_dataset() first.")
 
+        actual_n = min(n, len(self.dataset))
+        logger.info("Sampling %d questions (requested=%d, available=%d, seed=%d)",
+                     actual_n, n, len(self.dataset), seed)
+
         indices = list(range(len(self.dataset)))
         rng = random.Random(seed)
         rng.shuffle(indices)
-        selected = indices[:min(n, len(self.dataset))]
-        return [self.dataset[i] for i in selected]
+        selected = indices[:actual_n]
+        samples = [self.dataset[i] for i in selected]
+
+        logger.debug("Sampled question IDs: %s",
+                      [s["id"] for s in samples[:5]])
+        return samples
 
     def permute_dataset(self, dataset_items: list[dict],
                         position: str) -> list[dict]:
@@ -69,15 +84,10 @@ class DatasetEvaluator:
             - answerKey updated to `position`
             - original_choices: the original ordering (for CSV export)
             - original_answer_key: the original answerKey (for CSV export)
-
-        Algorithm:
-            1. Record the original choices and answerKey for export.
-            2. Find the correct answer text using answerKey.
-            3. Remove it from the choices list.
-            4. Insert it at the target index (A=0, B=1, ..., E=4).
-            5. Re-label all choices A through E.
-            6. Update answerKey to the target position letter.
         """
+        logger.info("Permuting %d questions: gold answer -> position %s",
+                     len(dataset_items), position)
+
         permuted = []
 
         for item in dataset_items:
@@ -117,4 +127,5 @@ class DatasetEvaluator:
 
             permuted.append(new_item)
 
+        logger.info("Permutation complete: %d items processed", len(permuted))
         return permuted
