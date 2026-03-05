@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate Dataset — LLM Order Dependency Evaluator</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Progress Overlay -->
+    <div id="progressOverlay" class="progress-overlay" style="display:none;">
+        <div class="progress-box">
+            <h3>Generating Dataset...</h3>
+            <progress></progress>
+            <p>Asking the LLM to generate questions. This may take a minute.</p>
+        </div>
+    </div>
+
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>LLM Order Dependency Evaluator</strong></li>
+        </ul>
+        <ul>
+            <li>
+                <button class="hamburger-btn outline" type="button" aria-label="Menu"
+                        onclick="document.getElementById('sideMenu').classList.toggle('open')">
+                    <span class="hamburger-icon"></span>
+                </button>
+            </li>
+        </ul>
+    </nav>
+
+    <!-- Side Menu -->
+    <div id="sideMenu" class="side-menu">
+        <div class="side-menu-backdrop" onclick="document.getElementById('sideMenu').classList.remove('open')"></div>
+        <aside class="side-menu-panel">
+            <header>
+                <h3>Menu</h3>
+                <button class="close-btn" type="button" aria-label="Close"
+                        onclick="document.getElementById('sideMenu').classList.remove('open')">&times;</button>
+            </header>
+            <ul>
+                <li><a href="/">Analysis</a></li>
+                <li><a href="/generate_dataset" class="active-link">Generate Dataset</a></li>
+                <li><a href="/settings">Settings</a></li>
+            </ul>
+        </aside>
+    </div>
+
+    <main class="container">
+        <h1>Generate Dataset</h1>
+        <p>Use the configured LLM to generate multiple-choice questions that can be used for order dependency evaluation.</p>
+
+        {% if error %}
+        <article class="test-result test-error">
+            <strong>Error:</strong> {{ error }}
+            {% if raw_response %}
+            <details style="margin-top: 0.5rem;">
+                <summary>Raw model response</summary>
+                <code>{{ raw_response[:2000] }}</code>
+            </details>
+            {% endif %}
+        </article>
+        {% endif %}
+
+        <!-- Generation Form -->
+        <section>
+            <h2>Generate New Questions</h2>
+            <form method="post" action="/generate_dataset" id="genForm"
+                  onsubmit="document.getElementById('progressOverlay').style.display='flex'">
+
+                <label for="topic">Topic / Subject Area</label>
+                <input type="text" id="topic" name="topic"
+                       value="{{ gen_topic or 'general knowledge' }}"
+                       placeholder="e.g. general knowledge, biology, world history">
+                <small>The LLM will generate questions about this topic.</small>
+
+                <label for="gen_num_questions">Number of Questions</label>
+                <input type="number" id="gen_num_questions" name="num_questions"
+                       value="10" min="1" max="50">
+                <small>More questions take longer to generate. Max 50 per request.</small>
+
+                <label for="dataset_name">Dataset Name (optional)</label>
+                <input type="text" id="dataset_name" name="dataset_name"
+                       value="{{ gen_name or '' }}"
+                       placeholder="e.g. Biology Quiz Set 1">
+
+                <button type="submit">Generate Questions</button>
+            </form>
+        </section>
+
+        <!-- Generated Questions Preview -->
+        {% if generated %}
+        <section>
+            <h2>Generated Questions ({{ generated | length }})</h2>
+
+            <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Question</th>
+                        <th>A</th>
+                        <th>B</th>
+                        <th>C</th>
+                        <th>D</th>
+                        <th>E</th>
+                        <th>Answer</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for q in generated %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td><small>{{ q.question[:80] }}{% if q.question|length > 80 %}...{% endif %}</small></td>
+                        {% for t in q.choices.text %}
+                        <td><small>{{ t[:30] }}{% if t|length > 30 %}...{% endif %}</small></td>
+                        {% endfor %}
+                        <td><strong>{{ q.answerKey }}</strong></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+
+            <div class="button-group" style="margin-top: 1rem;">
+                <!-- Save to server -->
+                <button type="button" class="outline" onclick="saveDataset()">Save Dataset</button>
+                <!-- Export as JSON -->
+                <a href="/export_dataset/{{ generated_id }}" role="button" class="outline secondary">
+                    Export as JSON
+                </a>
+                <!-- Use for evaluation -->
+                <button type="button" onclick="useForEvaluation()">Use for Evaluation</button>
+            </div>
+
+            <div id="saveResult" style="display:none; margin-top:0.75rem;"></div>
+
+            <input type="hidden" id="generatedId" value="{{ generated_id }}">
+            <input type="hidden" id="generatedName" value="{{ gen_name }}">
+        </section>
+        {% endif %}
+
+        <!-- Saved Custom Datasets -->
+        {% if saved_datasets %}
+        <section>
+            <h2>Saved Datasets</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Questions</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ds in saved_datasets %}
+                    <tr>
+                        <td>{{ ds.name }}</td>
+                        <td>{{ ds.num_questions }}</td>
+                        <td><small>{{ ds.created[:19] if ds.created else "—" }}</small></td>
+                        <td>
+                            <div class="button-group">
+                                <button type="button" class="outline secondary" style="padding: 0.25rem 0.75rem;"
+                                        onclick="useCustomDataset('{{ ds.filename[:-5] }}')">
+                                    Use
+                                </button>
+                                <a href="/export_dataset/{{ ds.filename[:-5] }}" role="button"
+                                   class="outline secondary" style="padding: 0.25rem 0.75rem;">
+                                    Export
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        {% endif %}
+
+        <footer>
+            <p><small>
+                {% if is_api_mode %}
+                    API: <strong>{{ api_base_url }}</strong> ({{ api_model }})
+                {% else %}
+                    Model: <strong>{{ current_model or 'Qwen/Qwen3.5-2B' }}</strong>
+                {% endif %}
+                &middot; Dataset: <strong>{{ current_dataset or 'tau/commonsense_qa' }}</strong>
+            </small></p>
+        </footer>
+    </main>
+
+    <script>
+        async function saveDataset() {
+            const dsId = document.getElementById('generatedId').value;
+            const dsName = document.getElementById('generatedName').value;
+            const resultDiv = document.getElementById('saveResult');
+
+            try {
+                const form = new FormData();
+                form.append('dataset_id', dsId);
+                form.append('dataset_name', dsName);
+
+                const resp = await fetch('/save_generated_dataset', {
+                    method: 'POST',
+                    body: form,
+                });
+                const data = await resp.json();
+                resultDiv.style.display = 'block';
+
+                if (data.success) {
+                    resultDiv.className = 'test-result test-success';
+                    resultDiv.innerHTML = '<strong>Saved!</strong> Dataset "' +
+                        data.name + '" saved. Reload to see it in the list.';
+                } else {
+                    resultDiv.className = 'test-result test-error';
+                    resultDiv.innerHTML = '<strong>Error:</strong> ' + data.error;
+                }
+            } catch (e) {
+                resultDiv.style.display = 'block';
+                resultDiv.className = 'test-result test-error';
+                resultDiv.innerHTML = '<strong>Error:</strong> ' + e.message;
+            }
+        }
+
+        async function useForEvaluation() {
+            const dsId = document.getElementById('generatedId').value;
+            await useCustomDataset(dsId);
+        }
+
+        async function useCustomDataset(dsId) {
+            try {
+                const form = new FormData();
+                form.append('dataset_id', dsId);
+
+                const resp = await fetch('/use_custom_dataset', {
+                    method: 'POST',
+                    body: form,
+                });
+                const data = await resp.json();
+
+                if (data.success) {
+                    alert('Switched to dataset: ' + data.name + ' (' + data.num_questions + ' questions). Go to Analysis to run evaluations.');
+                    window.location.href = '/';
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+    </script>
+</body>
+</html>

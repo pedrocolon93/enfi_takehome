@@ -42,6 +42,7 @@
             </header>
             <ul>
                 <li><a href="/">Analysis</a></li>
+                <li><a href="/generate_dataset">Generate Dataset</a></li>
                 <li><a href="/settings" class="active-link">Settings</a></li>
             </ul>
         </aside>
@@ -190,6 +191,26 @@
                 <a href="/" role="button" class="secondary outline">Cancel</a>
             </div>
         </form>
+
+        <!-- Import Custom Dataset -->
+        <section>
+            <h2>Import Custom Dataset</h2>
+            <p><small>Import a previously exported JSON dataset to use alongside HuggingFace datasets.</small></p>
+
+            {% if import_success %}
+            <article class="settings-saved">{{ import_success }}</article>
+            {% endif %}
+            {% if import_error %}
+            <article class="test-result test-error">{{ import_error }}</article>
+            {% endif %}
+
+            <form method="post" action="/import_dataset" enctype="multipart/form-data">
+                <label for="dataset_file">Dataset JSON File</label>
+                <input type="file" id="dataset_file" name="dataset_file" accept=".json">
+                <small>Upload a JSON file exported from the Generate Dataset page.</small>
+                <button type="submit" class="outline" style="margin-top: 0.5rem;">Import Dataset</button>
+            </form>
+        </section>
     </main>
 
     <script>

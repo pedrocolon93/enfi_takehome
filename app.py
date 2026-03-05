@@ -2,16 +2,20 @@
 
 Orchestrates ModelEvaluator and DatasetEvaluator to run MCQ evaluations
 with permuted answer orderings, compute metrics (accuracy, precision/recall,
-ODS), and serve results via a web interface with Chart.js visualizations.
+RStd, chi-squared), and serve results via a web interface with Chart.js
+visualizations.
 """
 
 import csv
 import io
 import json
 import logging
+import os
+import uuid
 from collections import Counter
 
 import numpy as np
+from scipy import stats
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -76,6 +80,7 @@ async def index(request: Request):
         "request": request,
         "results": None,
         "all_results": None,
+        "dataset_size": len(dataset_evaluator.dataset) if dataset_evaluator.dataset else 0,
         **_settings_context(),
     })
 
@@ -204,25 +209,27 @@ async def evaluate(
     request: Request,
     position: str = Form(...),
     num_questions: int = Form(50),
+    uniform_sample: str = Form(""),
 ):
-    """Run evaluation for a single answer position permutation.
-
-    Args:
-        position: Where to place the golden answer ("A"-"E" or "original").
-        num_questions: Number of questions to sample from the dataset.
-    """
+    """Run evaluation for a single answer position permutation."""
     global _last_raw_results
 
-    logger.info("Single evaluation: position=%s, num_questions=%d", position, num_questions)
+    uniform = bool(uniform_sample)
+    logger.info("Single evaluation: position=%s, num_questions=%d, uniform=%s",
+                position, num_questions, uniform)
     model_evaluator.cancel_requested = False
-    
-    sample = dataset_evaluator.sample_dataset(num_questions, seed=42)
+
+    sample = dataset_evaluator.sample_dataset(num_questions, seed=42, uniform=uniform)
     permuted = dataset_evaluator.permute_dataset(sample, position)
     raw_results = model_evaluator.run_dataset_on_model(permuted)
 
     _last_raw_results = raw_results
     metrics = compute_metrics(raw_results, position)
-    logger.info("Single evaluation complete: accuracy=%.2f%%", metrics["accuracy"] * 100)
+    chi2 = compute_chi_squared(metrics)
+    rstd = compute_rstd(metrics)
+    incorrect = [r for r in raw_results if not r["correct"]]
+    logger.info("Single evaluation complete: accuracy=%.2f%%, RStd=%.4f, chi2=%.4f (p=%.6f)",
+                metrics["accuracy"] * 100, rstd, chi2["chi2_stat"], chi2["p_value"])
 
     return templates.TemplateResponse("index.html", {
         "request": request,
@@ -231,6 +238,12 @@ async def evaluate(
         "position": position,
         "num_questions": num_questions,
         "chart_data": json.dumps(metrics["letter_counts"]),
+        "chi_squared": chi2,
+        "rstd": rstd,
+        "raw_results": raw_results,
+        "incorrect_questions": incorrect,
+        "uniform_sample": uniform,
+        "dataset_size": len(dataset_evaluator.dataset) if dataset_evaluator.dataset else 0,
         **_settings_context(),
     })
 
@@ -239,14 +252,17 @@ async def evaluate(
 async def evaluate_all(
     request: Request,
     num_questions: int = Form(50),
+    uniform_sample: str = Form(""),
 ):
-    """Run evaluation across all permutations (A-E + original) and compute ODS."""
+    """Run evaluation across all permutations (A-E + original) and compute RStd."""
     global _last_raw_results
 
-    logger.info("Full evaluation: num_questions=%d, running 6 permutations", num_questions)
+    uniform = bool(uniform_sample)
+    logger.info("Full evaluation: num_questions=%d, uniform=%s, running 6 permutations",
+                num_questions, uniform)
     model_evaluator.cancel_requested = False
-    
-    sample = dataset_evaluator.sample_dataset(num_questions, seed=42)
+
+    sample = dataset_evaluator.sample_dataset(num_questions, seed=42, uniform=uniform)
 
     all_metrics = {}
     all_raw = []
@@ -265,25 +281,64 @@ async def evaluate_all(
         all_metrics[position] = compute_metrics(raw_results, position)
 
     _last_raw_results = all_raw
-    ods = compute_ods(all_metrics)
     insight = compute_bias_insight(all_metrics)
 
-    logger.info("Full evaluation complete: ODS=%.4f, most_biased=%s",
-                ods, insight.get("most_biased_position"))
+    # RStd per permutation (primary bias metric)
+    all_rstd = {pos: compute_rstd(m) for pos, m in all_metrics.items()}
+
+    # Overall RStd: average across all permutations
+    rstd_values = [v for v in all_rstd.values() if v is not None]
+    overall_rstd = round(float(np.mean(rstd_values)), 4) if rstd_values else None
+
+    # Chi-squared only on the original (unpermuted) distribution
+    original_chi2 = None
+    if "original" in all_metrics:
+        original_chi2 = compute_chi_squared(all_metrics["original"])
+
+    # Build incorrect questions map: question_id -> {pos: result_dict}
+    incorrect_map = {}
+    for r in all_raw:
+        if not r["correct"]:
+            qid = r["id"]
+            if qid not in incorrect_map:
+                incorrect_map[qid] = {
+                    "question": r["question"],
+                    "original_ordering": r["original_ordering"],
+                    "positions": {},
+                }
+            incorrect_map[qid]["positions"][r.get("gold_position", "?")] = {
+                "model_answer": r["model_answer"],
+                "expected": r["permuted_answer_key"],
+                "permuted_ordering": r["permuted_ordering"],
+                "raw_response": r["model_raw_response"],
+            }
+
+    logger.info("Full evaluation complete: overall_RStd=%.4f, most_biased=%s",
+                overall_rstd or 0, insight.get("most_biased_position"))
     for pos, m in all_metrics.items():
-        logger.info("  %s: accuracy=%.1f%%, counts=%s",
-                     pos, m["accuracy"] * 100, m["letter_counts"])
+        logger.info("  %s: accuracy=%.1f%%, RStd=%.4f",
+                     pos, m["accuracy"] * 100, all_rstd[pos])
+    if original_chi2:
+        logger.info("  Chi-squared (original): chi2=%.4f, p=%.6f, significant=%s",
+                     original_chi2["chi2_stat"], original_chi2["p_value"],
+                     original_chi2["significant"])
 
     return templates.TemplateResponse("index.html", {
         "request": request,
         "results": None,
         "all_results": all_metrics,
-        "ods": ods,
+        "overall_rstd": overall_rstd,
         "insight": insight,
         "num_questions": num_questions,
         "all_chart_data": json.dumps({
             pos: m["letter_counts"] for pos, m in all_metrics.items()
         }),
+        "original_chi2": original_chi2,
+        "all_rstd": all_rstd,
+        "raw_results": all_raw,
+        "incorrect_map": incorrect_map,
+        "uniform_sample": uniform,
+        "dataset_size": len(dataset_evaluator.dataset) if dataset_evaluator.dataset else 0,
         **_settings_context(),
     })
 
@@ -397,46 +452,6 @@ def compute_metrics(results: list[dict], position: str) -> dict:
     }
 
 
-def compute_ods(all_results: dict) -> float:
-    """Compute the Option Dependency Score (ODS).
-
-    ODS measures how much the model's answer distribution changes when
-    the correct answer is moved to different positions. It is the normalized
-    average variance of per-letter selection probabilities across all 5
-    positional permutations (A-E).
-
-    An ODS of 0.0 means the model is perfectly invariant to answer position.
-    An ODS of 1.0 means the model's answers completely depend on position.
-
-    Args:
-        all_results: Dict mapping position -> metrics dict. Must include
-                     keys "A" through "E" (the "original" key is excluded
-                     from the ODS calculation).
-
-    Returns:
-        ODS value between 0.0 and 1.0.
-    """
-    per_letter_variances = []
-    
-    # Require at least two permutations to compute variance
-    valid_perms = [lbl for lbl in LABELS if lbl in all_results]
-    if len(valid_perms) < 2:
-        return None
-
-    for letter in LABELS:
-        fractions = []
-        for perm_key in valid_perms:
-            metrics = all_results[perm_key]
-            total = metrics["total"]
-            count = metrics["letter_counts"].get(letter, 0)
-            fractions.append(count / total if total > 0 else 0.0)
-        per_letter_variances.append(float(np.var(fractions)))
-
-    mean_var = float(np.mean(per_letter_variances))
-    max_var = 0.16  # Theoretical max for 5 permutations
-    ods = min(mean_var / max_var, 1.0)
-    return round(ods, 4)
-
 
 def compute_bias_insight(all_results: dict) -> dict:
     """Identify which position shows the strongest positional bias.
@@ -478,6 +493,361 @@ def compute_bias_insight(all_results: dict) -> dict:
         "most_biased_position": most_biased,
         "detail": detail,
     }
+
+
+def compute_chi_squared(metrics: dict) -> dict:
+    """Run a chi-squared goodness-of-fit test on the model's answer distribution.
+
+    Tests whether the model's letter selections differ significantly from a
+    uniform distribution (each letter equally likely = total/5).
+
+    Args:
+        metrics: Metrics dict from compute_metrics (needs letter_counts, total).
+
+    Returns:
+        Dict with chi2_stat, p_value, significant (bool at alpha=0.05),
+        observed, expected.
+    """
+    observed = [metrics["letter_counts"].get(lbl, 0) for lbl in LABELS]
+    total = sum(observed)
+    if total == 0:
+        return {"chi2_stat": 0.0, "p_value": 1.0, "significant": False,
+                "observed": observed, "expected": [0] * 5}
+
+    expected = [total / len(LABELS)] * len(LABELS)
+    chi2_stat, p_value = stats.chisquare(observed, f_exp=expected)
+
+    return {
+        "chi2_stat": round(float(chi2_stat), 4),
+        "p_value": round(float(p_value), 6),
+        "significant": p_value < 0.05,
+        "observed": observed,
+        "expected": [round(e, 1) for e in expected],
+    }
+
+
+def compute_rstd(metrics: dict) -> float:
+    """Compute Recall Standard Deviation (RStd).
+
+    RStd is the standard deviation of per-letter recall values.
+    RStd = 0 means the model recalls each letter equally well (unbiased).
+    Higher values indicate stronger selection bias.
+
+    Args:
+        metrics: Metrics dict from compute_metrics (needs per_letter).
+
+    Returns:
+        RStd value (float).
+    """
+    recalls = [metrics["per_letter"][lbl]["recall"] for lbl in LABELS]
+    return round(float(np.std(recalls)), 4)
+
+
+# --- Custom Dataset Storage ---
+CUSTOM_DATASETS_DIR = "custom_datasets"
+os.makedirs(CUSTOM_DATASETS_DIR, exist_ok=True)
+
+# Store generated datasets in memory for the current session
+_generated_datasets: dict[str, list[dict]] = {}
+
+
+def _load_custom_datasets_index() -> list[dict]:
+    """List all saved custom datasets from disk."""
+    datasets = []
+    for fname in sorted(os.listdir(CUSTOM_DATASETS_DIR)):
+        if fname.endswith(".json"):
+            fpath = os.path.join(CUSTOM_DATASETS_DIR, fname)
+            try:
+                with open(fpath) as f:
+                    data = json.load(f)
+                datasets.append({
+                    "filename": fname,
+                    "name": data.get("name", fname),
+                    "num_questions": len(data.get("questions", [])),
+                    "created": data.get("created", ""),
+                })
+            except Exception:
+                pass
+    return datasets
+
+
+@app.get("/generate_dataset", response_class=HTMLResponse)
+async def generate_dataset_page(request: Request):
+    """Serve the dataset generation page."""
+    saved_datasets = _load_custom_datasets_index()
+    return templates.TemplateResponse("generate_dataset.html", {
+        "request": request,
+        "saved_datasets": saved_datasets,
+        **_settings_context(),
+    })
+
+
+@app.post("/generate_dataset", response_class=HTMLResponse)
+async def generate_dataset(
+    request: Request,
+    topic: str = Form("general knowledge"),
+    num_questions: int = Form(10),
+    dataset_name: str = Form(""),
+):
+    """Generate a MCQ dataset using the configured LLM."""
+    logger.info("Generating dataset: topic=%s, num_questions=%d", topic, num_questions)
+
+    if not model_evaluator.is_api_mode and model_evaluator.model is None:
+        saved_datasets = _load_custom_datasets_index()
+        return templates.TemplateResponse("generate_dataset.html", {
+            "request": request,
+            "error": "No model loaded. Configure a model in Settings first.",
+            "saved_datasets": saved_datasets,
+            **_settings_context(),
+        })
+
+    prompt = (
+        f"Generate exactly {num_questions} multiple-choice questions about {topic}. "
+        "Each question must have exactly 5 answer options (A through E) with exactly one correct answer.\n\n"
+        "Return ONLY valid JSON in this exact format (no other text):\n"
+        '[\n'
+        '  {\n'
+        '    "question": "What is the capital of France?",\n'
+        '    "choices": {"label": ["A","B","C","D","E"], '
+        '"text": ["Paris","London","Berlin","Madrid","Rome"]},\n'
+        '    "answerKey": "A"\n'
+        '  }\n'
+        ']\n'
+    )
+
+    try:
+        backend = "API" if model_evaluator.is_api_mode else "local"
+        logger.info("Sending generation prompt to %s backend (max_new_tokens=4096)", backend)
+
+        if model_evaluator.is_api_mode:
+            old_max = model_evaluator.gen_params.max_new_tokens
+            model_evaluator.gen_params.max_new_tokens = 4096
+            raw = model_evaluator._run_api_single(prompt)
+            model_evaluator.gen_params.max_new_tokens = old_max
+        else:
+            old_max = model_evaluator.gen_params.max_new_tokens
+            model_evaluator.gen_params.max_new_tokens = 4096
+            raw = model_evaluator._run_local_batch([prompt])[0]
+            model_evaluator.gen_params.max_new_tokens = old_max
+
+        logger.info("Received raw response: %d chars", len(raw))
+        logger.debug("Raw response preview: %r", raw[:200])
+
+        # Try to extract JSON from the response
+        json_match = raw
+        start = raw.find("[")
+        end = raw.rfind("]")
+        if start != -1 and end != -1:
+            json_match = raw[start:end + 1]
+            logger.info("Extracted JSON array from position %d to %d", start, end + 1)
+        else:
+            logger.warning("No JSON array delimiters found in response")
+
+        questions = json.loads(json_match)
+        logger.info("Parsed %d raw question objects from JSON", len(questions))
+
+        # Validate and add IDs
+        validated = []
+        skipped = 0
+        for i, q in enumerate(questions):
+            if not isinstance(q, dict):
+                logger.debug("Skipping item %d: not a dict", i)
+                skipped += 1
+                continue
+            if "question" not in q or "choices" not in q or "answerKey" not in q:
+                logger.debug("Skipping item %d: missing required fields", i)
+                skipped += 1
+                continue
+            choices = q["choices"]
+            if not isinstance(choices, dict) or "label" not in choices or "text" not in choices:
+                logger.debug("Skipping item %d: invalid choices structure", i)
+                skipped += 1
+                continue
+            if len(choices["label"]) != 5 or len(choices["text"]) != 5:
+                logger.debug("Skipping item %d: expected 5 choices, got %d labels / %d texts",
+                             i, len(choices["label"]), len(choices["text"]))
+                skipped += 1
+                continue
+            if q["answerKey"] not in choices["label"]:
+                logger.debug("Skipping item %d: answerKey '%s' not in labels", i, q["answerKey"])
+                skipped += 1
+                continue
+            q["id"] = f"gen_{uuid.uuid4().hex[:8]}"
+            q["question_concept"] = topic
+            validated.append(q)
+
+        logger.info("Validation complete: %d valid, %d skipped out of %d parsed",
+                     len(validated), skipped, len(questions))
+
+        if not validated:
+            raise ValueError("No valid questions could be parsed from the model's response.")
+
+        # Store in memory
+        ds_id = uuid.uuid4().hex[:12]
+        _generated_datasets[ds_id] = validated
+
+        logger.info("Generated %d valid questions (requested %d)", len(validated), num_questions)
+
+        saved_datasets = _load_custom_datasets_index()
+        return templates.TemplateResponse("generate_dataset.html", {
+            "request": request,
+            "generated": validated,
+            "generated_id": ds_id,
+            "gen_topic": topic,
+            "gen_name": dataset_name or f"{topic} ({len(validated)} questions)",
+            "saved_datasets": saved_datasets,
+            **_settings_context(),
+        })
+
+    except Exception as e:
+        logger.error("Dataset generation failed: %s", e)
+        saved_datasets = _load_custom_datasets_index()
+        return templates.TemplateResponse("generate_dataset.html", {
+            "request": request,
+            "error": f"Generation failed: {e}",
+            "raw_response": raw if 'raw' in dir() else "",
+            "saved_datasets": saved_datasets,
+            **_settings_context(),
+        })
+
+
+@app.post("/save_generated_dataset")
+async def save_generated_dataset(
+    request: Request,
+    dataset_id: str = Form(""),
+    dataset_name: str = Form(""),
+):
+    """Save a generated dataset to disk as JSON."""
+    if dataset_id not in _generated_datasets:
+        return JSONResponse({"success": False, "error": "Dataset not found in memory. Generate it again."})
+
+    questions = _generated_datasets[dataset_id]
+    name = dataset_name.strip() or f"generated_{dataset_id}"
+    filename = f"{dataset_id}.json"
+    filepath = os.path.join(CUSTOM_DATASETS_DIR, filename)
+
+    from datetime import datetime
+    data = {
+        "name": name,
+        "created": datetime.now().isoformat(),
+        "num_questions": len(questions),
+        "questions": questions,
+    }
+
+    with open(filepath, "w") as f:
+        json.dump(data, f, indent=2)
+
+    logger.info("Saved generated dataset: %s (%d questions)", filepath, len(questions))
+    return JSONResponse({"success": True, "filename": filename, "name": name})
+
+
+@app.get("/export_dataset/{dataset_id}")
+async def export_dataset(dataset_id: str):
+    """Export a generated/saved dataset as downloadable JSON."""
+    # Check memory first
+    if dataset_id in _generated_datasets:
+        questions = _generated_datasets[dataset_id]
+        data = {"name": f"generated_{dataset_id}", "questions": questions}
+    else:
+        # Check disk
+        filepath = os.path.join(CUSTOM_DATASETS_DIR, f"{dataset_id}.json")
+        if not os.path.exists(filepath):
+            return HTMLResponse("Dataset not found.", status_code=404)
+        with open(filepath) as f:
+            data = json.load(f)
+
+    output = json.dumps(data, indent=2)
+    return StreamingResponse(
+        iter([output]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={dataset_id}.json"},
+    )
+
+
+@app.post("/import_dataset", response_class=HTMLResponse)
+async def import_dataset(request: Request):
+    """Import a dataset from uploaded JSON file."""
+    form = await request.form()
+    upload = form.get("dataset_file")
+    if not upload:
+        return templates.TemplateResponse("settings.html", {
+            "request": request,
+            "import_error": "No file uploaded.",
+            **_settings_context(),
+        })
+
+    try:
+        content = await upload.read()
+        data = json.loads(content)
+        questions = data.get("questions", data if isinstance(data, list) else [])
+
+        if not questions:
+            raise ValueError("No questions found in the uploaded file.")
+
+        # Validate
+        for q in questions:
+            if "question" not in q or "choices" not in q or "answerKey" not in q:
+                raise ValueError(f"Invalid question format: missing required fields")
+
+        # Save to custom_datasets
+        ds_id = uuid.uuid4().hex[:12]
+        name = data.get("name", upload.filename or f"imported_{ds_id}")
+        filepath = os.path.join(CUSTOM_DATASETS_DIR, f"{ds_id}.json")
+
+        from datetime import datetime
+        save_data = {
+            "name": name,
+            "created": datetime.now().isoformat(),
+            "num_questions": len(questions),
+            "questions": questions,
+        }
+        with open(filepath, "w") as f:
+            json.dump(save_data, f, indent=2)
+
+        logger.info("Imported dataset: %s (%d questions)", name, len(questions))
+
+        return templates.TemplateResponse("settings.html", {
+            "request": request,
+            "import_success": f"Imported '{name}' with {len(questions)} questions.",
+            **_settings_context(),
+        })
+    except Exception as e:
+        logger.error("Dataset import failed: %s", e)
+        return templates.TemplateResponse("settings.html", {
+            "request": request,
+            "import_error": f"Import failed: {e}",
+            **_settings_context(),
+        })
+
+
+@app.post("/use_custom_dataset")
+async def use_custom_dataset(request: Request, dataset_id: str = Form("")):
+    """Switch to using a custom dataset for evaluation."""
+    filepath = os.path.join(CUSTOM_DATASETS_DIR, f"{dataset_id}.json")
+    if not os.path.exists(filepath):
+        return JSONResponse({"success": False, "error": "Dataset not found."})
+
+    with open(filepath) as f:
+        data = json.load(f)
+
+    questions = data.get("questions", [])
+
+    # Monkey-patch the dataset_evaluator to use custom data
+    class CustomDatasetWrapper:
+        def __init__(self, items):
+            self._items = items
+        def __len__(self):
+            return len(self._items)
+        def __getitem__(self, idx):
+            return self._items[idx]
+
+    dataset_evaluator.dataset = CustomDatasetWrapper(questions)
+    dataset_evaluator.dataset_name = data.get("name", f"custom_{dataset_id}")
+    logger.info("Switched to custom dataset: %s (%d questions)",
+                dataset_evaluator.dataset_name, len(questions))
+
+    return JSONResponse({"success": True, "name": dataset_evaluator.dataset_name,
+                         "num_questions": len(questions)})
 
 
 if __name__ == "__main__":

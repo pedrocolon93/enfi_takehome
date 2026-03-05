@@ -186,29 +186,29 @@
     margin-bottom: 1rem;
 }
 
-/* ODS score color coding */
-.ods-display article {
+/* Score display color coding */
+.score-display article {
     text-align: center;
 }
 
-.ods-score {
+.score-value {
     font-size: 2rem;
 }
 
-.ods-low {
+.score-low {
     color: #2ecc71;
 }
 
-.ods-medium {
+.score-medium {
     color: #f39c12;
 }
 
-.ods-high {
+.score-high {
     color: #e74c3c;
 }
 
-/* ODS explanation box */
-.ods-explanation {
+/* Explanation box */
+.explanation-box {
     margin: 1rem 0;
     padding: 1rem;
     background: var(--pico-card-background-color);
@@ -216,11 +216,11 @@
     border: 1px solid var(--pico-muted-border-color);
 }
 
-.ods-explanation p {
+.explanation-box p {
     margin-bottom: 0.5rem;
 }
 
-.ods-explanation ul {
+.explanation-box ul {
     margin-top: 0.5rem;
 }
 

@@ -40,13 +40,17 @@ class DatasetEvaluator:
         self.dataset = hf_load_dataset(self.dataset_name, split=self.split)
         logger.info("Dataset loaded: %d examples", len(self.dataset))
 
-    def sample_dataset(self, n: int, seed: int = 42) -> list[dict]:
+    def sample_dataset(self, n: int, seed: int = 42,
+                       uniform: bool = False) -> list[dict]:
         """Return a reproducible random sample of n items.
 
         Args:
             n: Number of questions to sample. Capped at dataset size.
             seed: Random seed for reproducibility. Using the same seed
                   ensures all permutations are evaluated on the same questions.
+            uniform: If True, sample uniformly across answer keys (A-E) so
+                     each key is equally represented. This avoids label
+                     imbalance skewing metrics like RStd.
 
         Returns:
             List of dicts matching the commonsense_qa schema:
@@ -56,13 +60,40 @@ class DatasetEvaluator:
             raise RuntimeError("Dataset not loaded. Call load_dataset() first.")
 
         actual_n = min(n, len(self.dataset))
-        logger.info("Sampling %d questions (requested=%d, available=%d, seed=%d)",
-                     actual_n, n, len(self.dataset), seed)
-
-        indices = list(range(len(self.dataset)))
         rng = random.Random(seed)
-        rng.shuffle(indices)
-        selected = indices[:actual_n]
+
+        if uniform:
+            # Group indices by answerKey
+            by_key = {}
+            for i in range(len(self.dataset)):
+                key = self.dataset[i].get("answerKey", "?")
+                by_key.setdefault(key, []).append(i)
+
+            # Shuffle each group
+            for indices in by_key.values():
+                rng.shuffle(indices)
+
+            # Round-robin across keys
+            keys = sorted(by_key.keys())
+            per_key = actual_n // len(keys)
+            remainder = actual_n % len(keys)
+
+            selected = []
+            for i, key in enumerate(keys):
+                take = per_key + (1 if i < remainder else 0)
+                selected.extend(by_key[key][:take])
+
+            rng.shuffle(selected)
+            logger.info("Uniform sampling: %d questions across %d answer keys "
+                        "(requested=%d, seed=%d, per_key~%d)",
+                        len(selected), len(keys), n, seed, per_key)
+        else:
+            indices = list(range(len(self.dataset)))
+            rng.shuffle(indices)
+            selected = indices[:actual_n]
+            logger.info("Random sampling: %d questions (requested=%d, available=%d, seed=%d)",
+                        actual_n, n, len(self.dataset), seed)
+
         samples = [self.dataset[i] for i in selected]
 
         logger.debug("Sampled question IDs: %s",

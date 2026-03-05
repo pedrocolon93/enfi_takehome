@@ -220,7 +220,7 @@ class ModelEvaluator:
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
-                    results[idx] = future.result()
+                        results[idx] = future.result()
                 except Exception as e:
                     logger.error("API request #%d failed: %s", idx, e)
                     results[idx] = ""
