@@ -319,6 +319,8 @@
                 <p>
                     Tests whether the model's letter selection on the <em>original</em> (unpermuted)
                     dataset differs significantly from a uniform distribution (each letter equally likely).
+                    Assuming the dataset has a close to equal distribution of answers, this measure should
+                    return that there is no statistical significance if the model has a balanced set of outputs
                 </p>
                 <p>
                     &chi;&sup2; = <strong>{{ original_chi2.chi2_stat }}</strong>,
@@ -622,7 +624,7 @@
             const cancelBtn = document.getElementById('cancelButton');
             cancelBtn.textContent = 'Cancel';
             cancelBtn.disabled = false;
-            
+
             if (form.submitter && form.submitter.formAction && form.submitter.formAction.includes('evaluate_all')) {
                 msg.textContent = 'Running all 6 permutations. This may take a while...';
             } else {
@@ -637,7 +639,7 @@
             btn.disabled = true;
             btn.textContent = 'Cancelling...';
             msg.textContent = 'Cancellation requested, finishing current batch...';
-            
+
             try {
                 const response = await fetch('/cancel', { method: 'POST' });
                 if (!response.ok) {
