@@ -34,7 +34,8 @@ that was chosen significantly more than any of the others.
 
 ### Prerequisites
 
-- Python 3.10+
+- [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) (Miniconda or Anaconda)
+- Python 3.10+ (installed via conda)
 - GPU recommended (~5 GB VRAM for Qwen3.5-2B in float16). CPU works but inference is significantly slower.
 - Alternatively, use a remote OpenAI-compatible API endpoint (no GPU needed locally).
 
@@ -45,15 +46,12 @@ that was chosen significantly more than any of the others.
 git clone https://github.com/pedrocolon93/enfi_takehome
 cd enfi_takehome
 
-# Create a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or: venv\Scripts\activate  # Windows
-# Update pip 
-python -m pip install --upgrade pip
+# Create a conda environment with Python 3.10
+conda create -n enfi_takehome python=3.10
+conda activate enfi_takehome
+
 # Install dependencies, if using a GPU in linux uncomment the flash-linear-attention line for extra acceleration
 pip install -r requirements.txt
-
 ```
 
 ## Running the Application
