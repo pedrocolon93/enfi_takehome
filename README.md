@@ -43,15 +43,17 @@ that was chosen significantly more than any of the others.
 ```bash
 # Clone the repository
 git clone https://github.com/pedrocolon93/enfi_takehome
-cd Enfi
+cd enfi_takehome
 
 # Create a virtual environment (recommended)
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # or: venv\Scripts\activate  # Windows
-
-# Install dependencies
+# Update pip 
+python -m pip install --upgrade pip
+# Install dependencies, if using a GPU in linux uncomment the flash-linear-attention line for extra acceleration
 pip install -r requirements.txt
+
 ```
 
 ## Running the Application
@@ -61,12 +63,6 @@ python app.py
 ```
 
 The server starts at **http://localhost:8000**. On first startup with a local model, it downloads the model (~4.5 GB) and dataset from HuggingFace Hub — this may take several minutes.
-
-Alternatively, use uvicorn directly:
-
-```bash
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
 
 ## Usage
 
