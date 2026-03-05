@@ -173,7 +173,7 @@ All parameters are configurable in Settings:
 Custom datasets can also be generated via the LLM, imported from JSON files, or used from any HuggingFace dataset with the same schema (`choices.label`, `choices.text`, `answerKey`).
 
 ## Insights and findings
-By testing the Qwen 3.5-2B model with our test app, with a rather small sampling of 150 questions we can see that the model tends to have 
+By testing the Qwen 3.5-2B model with our test app, with a rather small sampling of 150 questions we can see that the model tends to have a bias towards answers in B.  
 Below we can see the first screen in our test app run with 150 samples drawn uniformly.
 ![](images/s1.png)
 After running all the permutations tests we get the following:
